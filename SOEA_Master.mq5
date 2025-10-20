@@ -1,12 +1,10 @@
 //+------------------------------------------------------------------+
-//| SOEA_Master_Enhanced.mq5                                         |
-//| Fully Upgraded Self-Optimizing Expert Advisor v4.1              |
-//| Production-Ready with Enhanced Risk Management & Bug Fixes      |
+//| SOEA_Master.mq5         				                         |
 //+------------------------------------------------------------------+
 #property copyright "Expert Report - Enhanced by bfforex"
 #property version   "4.10"
 #property description "SOEA with WFO, Volatility Risk, Regime Switching, Drawdown Gating, and Advanced Trade Management"
-#property link      "https://github.com/bfforex/SOEA-Master"
+#property link      "https://github.com/bfforex/Self-Optimizing-Expert-Advisor-SOEA-"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -156,8 +154,6 @@ class CRiskManager;
 class CTradeManager;
 class CParameterLoader;
 class CChartObjectsManager;
-class CAdaptivePositionSizer;
-class CTimeBasedExit;
 class CPartialExitManager;
 
 //+------------------------------------------------------------------+
@@ -354,7 +350,6 @@ class CRiskManager
 {
 private:
     int m_ATR_Handle;
-    double m_ATR_Buffer[3];
     double m_LastATRValue;
     bool m_IsInitialized;
     
@@ -364,7 +359,6 @@ public:
         m_ATR_Handle = iATR(_Symbol, _Period, Inp_ATR_Period);
         if (m_ATR_Handle != INVALID_HANDLE)
         {
-            ArraySetAsSeries(m_ATR_Buffer, true);
             m_IsInitialized = true;
         }
         else
@@ -378,14 +372,17 @@ public:
     {
         if (!m_IsInitialized) return m_LastATRValue;
         
-        if (CopyBuffer(m_ATR_Handle, 0, 0, 3, m_ATR_Buffer) < 1)
+        double atr_buffer[];
+        ArraySetAsSeries(atr_buffer, true);
+        
+        if (CopyBuffer(m_ATR_Handle, 0, 0, 3, atr_buffer) < 1)
         {
             if (Inp_DebugLevel >= 2)
                 Print("Warning: Failed to copy ATR data. Using last value.");
             return m_LastATRValue;
         }
         
-        m_LastATRValue = m_ATR_Buffer[0];
+        m_LastATRValue = atr_buffer[0];
         return m_LastATRValue;
     }
     
@@ -505,7 +502,7 @@ private:
         bool executed;
     };
     
-    SPartialExit m_ExitLevels[];
+    SPartialExit m_ExitLevels[1];  // FIXED: Static array size
     int m_NumLevels;
     
     double NormalizeLot(double lot)
@@ -526,7 +523,6 @@ public:
     CPartialExitManager()
     {
         m_NumLevels = 1;
-        ArrayResize(m_ExitLevels, m_NumLevels);
         
         // Single partial exit configuration
         m_ExitLevels[0].exit_percentage = Inp_PartialExit1_Percent / 100.0;
@@ -600,7 +596,7 @@ public:
 };
 
 //+------------------------------------------------------------------+
-//| Trade Manager Class - Enhanced with Breakeven & Partial Exits    |
+//| Trade Manager Class - Enhanced                                    |
 //+------------------------------------------------------------------+
 class CTradeManager
 {
@@ -655,10 +651,10 @@ public:
             return false;
         }
         
-        if (PositionsTotal() >= Inp_MaxPositions)
+        if (GetOpenPositionsCount() >= Inp_MaxPositions)
         {
             if (Inp_DebugLevel >= 2)
-                Print("Cannot open trade: Max positions reached (", PositionsTotal(), ")");
+                Print("Cannot open trade: Max positions reached (", GetOpenPositionsCount(), ")");
             return false;
         }
         
@@ -741,17 +737,15 @@ public:
                 if (pos_type == POSITION_TYPE_BUY)
                 {
                     new_sl = current_price - trail_distance;
-                    // Only trail if new SL is higher AND above entry (don't trail below BE)
                     should_modify = (new_sl > sl) && (new_sl > entry_price);
                 }
                 else
                 {
                     new_sl = current_price + trail_distance;
-                    // Only trail if new SL is lower AND below entry
                     should_modify = (new_sl < sl) && (new_sl < entry_price);
                 }
                 
-                if (should_modify && profit_distance > atr_stop * 1.5) // Only trail when in profit
+                if (should_modify && profit_distance > atr_stop * 1.5)
                 {
                     if (m_Trade.PositionModify(ticket, new_sl, tp))
                     {
@@ -811,14 +805,15 @@ public:
 };
 
 //+------------------------------------------------------------------+
-//| Parameter Loader Class - Enhanced                                 |
+//| Parameter Loader Class                                            |
 //+------------------------------------------------------------------+
 class CParameterLoader
 {
 public:
     bool LoadWFOParameters(datetime current_time, int regime_id)
     {
-        if (IsTesting() && !IsOptimization())
+        // FIXED: Use MQLInfoInteger instead of IsTesting/IsOptimization
+        if (MQLInfoInteger(MQL_TESTER) && !MQLInfoInteger(MQL_OPTIMIZATION))
         {
             g_MA_Period_1 = Inp_FastMAPeriod_Default;
             g_MA_Period_2 = Inp_SlowMAPeriod_Default;
@@ -1029,8 +1024,7 @@ bool GenerateTrendSignal(bool &buy_signal, bool &sell_signal)
         return false;
     }
     
-    // MA Crossover logic with confirmation
-    // BUY: Fast MA crosses above Slow MA
+    // MA Crossover logic
     if (g_MABuffer_1[1] <= g_MABuffer_2[1] && g_MABuffer_1[0] > g_MABuffer_2[0])
     {
         buy_signal = true;
@@ -1038,7 +1032,6 @@ bool GenerateTrendSignal(bool &buy_signal, bool &sell_signal)
             Print("TREND BUY signal: MA1[0]=", g_MABuffer_1[0], " MA2[0]=", g_MABuffer_2[0]);
     }
     
-    // SELL: Fast MA crosses below Slow MA
     if (g_MABuffer_1[1] >= g_MABuffer_2[1] && g_MABuffer_1[0] < g_MABuffer_2[0])
     {
         sell_signal = true;
@@ -1062,7 +1055,6 @@ bool GenerateRangeSignal(bool &buy_signal, bool &sell_signal)
     }
     
     // RSI mean-reversion logic
-    // BUY: RSI crosses above oversold level
     if (g_RSIBuffer[1] <= Inp_RSI_Oversold && g_RSIBuffer[0] > Inp_RSI_Oversold)
     {
         buy_signal = true;
@@ -1070,7 +1062,6 @@ bool GenerateRangeSignal(bool &buy_signal, bool &sell_signal)
             Print("RANGE BUY signal: RSI=", g_RSIBuffer[0]);
     }
     
-    // SELL: RSI crosses below overbought level
     if (g_RSIBuffer[1] >= Inp_RSI_Overbought && g_RSIBuffer[0] < Inp_RSI_Overbought)
     {
         sell_signal = true;
@@ -1100,7 +1091,6 @@ void TradeDispatcher(ENUM_REGIME_ID regime_id, double lot_size)
         return;
     }
     
-    // Enforce minimum bars between trades
     if (g_BarsSinceLastTrade < Inp_MinBarsBetweenTrades)
     {
         if (Inp_DebugLevel >= 2)
@@ -1164,7 +1154,7 @@ void TradeDispatcher(ENUM_REGIME_ID regime_id, double lot_size)
 }
 
 //+------------------------------------------------------------------+
-//| Update Chart Comment Dashboard                                    |
+//| Update Chart Comment                                              |
 //+------------------------------------------------------------------+
 void UpdateChartComment()
 {
@@ -1182,41 +1172,31 @@ void UpdateChartComment()
         regime_text = "IDLE";
     
     string gating_text = "";
-    color gating_color = clrLimeGreen;
     
     if (g_CurrentGatingStatus == GATING_ACTIVE)
-    {
         gating_text = "ACTIVE";
-        gating_color = clrLimeGreen;
-    }
     else if (g_CurrentGatingStatus == GATING_REDUCED)
-    {
         gating_text = "REDUCED";
-        gating_color = clrOrange;
-    }
     else
-    {
         gating_text = "HALTED";
-        gating_color = clrRed;
-    }
     
     string comment = StringFormat(
-        "╔════════ SOEA v4.1 Enhanced Dashboard ════════╗\n" +
-        "║  Regime: %s | Gating: %s               ║\n" +
-        "╠═══════════════════════════════════════════╣\n" +
-        "║  Balance:  $%.2f\n" +
-        "║  Equity:   $%.2f\n" +
-        "║  HWM:      $%.2f\n" +
-        "║  DD:       %.2f%% / %.1f%%\n" +
-        "╠═══════════════════════════════════════════╣\n" +
-        "║  Positions:  %d / %d\n" +
-        "║  MA1: %d  |  MA2: %d  |  RSI: %d\n" +
-        "║  ATR: %.5f  |  Spread: %d pts\n" +
-        "║  Risk: %.2f%%  |  Magic: %d\n" +
-        "╠═══════════════════════════════════════════╣\n" +
-        "║  Bars Since Trade: %d (Min: %d)\n" +
-        "║  Last Update: %s\n" +
-        "╚═══════════════════════════════════════════╝",
+        "????????? SOEA v4.1 Enhanced Dashboard ?????????\n" +
+        "?  Regime: %s | Gating: %s               ?\n" +
+        "?????????????????????????????????????????????\n" +
+        "?  Balance:  $%.2f\n" +
+        "?  Equity:   $%.2f\n" +
+        "?  HWM:      $%.2f\n" +
+        "?  DD:       %.2f%% / %.1f%%\n" +
+        "?????????????????????????????????????????????\n" +
+        "?  Positions:  %d / %d\n" +
+        "?  MA1: %d  |  MA2: %d  |  RSI: %d\n" +
+        "?  ATR: %.5f  |  Spread: %d pts\n" +
+        "?  Risk: %.2f%%  |  Magic: %d\n" +
+        "?????????????????????????????????????????????\n" +
+        "?  Bars Since Trade: %d (Min: %d)\n" +
+        "?  Last Update: %s\n" +
+        "?????????????????????????????????????????????",
         regime_text, gating_text,
         balance, equity, hwm,
         dd, Inp_MaxEquityDrawdown,
@@ -1233,14 +1213,45 @@ void UpdateChartComment()
 }
 
 //+------------------------------------------------------------------+
+//| Update Chart Objects                                              |
+//+------------------------------------------------------------------+
+void UpdateChartObjects()
+{
+    if (ArraySize(g_MABuffer_1) >= 1 && ArraySize(g_MABuffer_2) >= 1)
+    {
+        g_ChartMgr.CreateOrUpdateHLine("FastMA", g_MABuffer_1[0], clrDodgerBlue, STYLE_SOLID, 2);
+        g_ChartMgr.CreateOrUpdateHLine("SlowMA", g_MABuffer_2[0], clrRed, STYLE_SOLID, 2);
+    }
+    
+    double hwm = g_DrawdownGate.HighWaterMark();
+    double hard_gate_price = hwm * (1.0 - Inp_MaxEquityDrawdown / 100.0);
+    double soft_gate_price = hwm * (1.0 - Inp_SoftGateThreshold / 100.0);
+    
+    g_ChartMgr.CreateOrUpdateHLine("HardGate", hard_gate_price, clrDarkRed, STYLE_DASHDOT, 3);
+    g_ChartMgr.CreateOrUpdateHLine("SoftGate", soft_gate_price, clrOrange, STYLE_DASH, 2);
+    
+    double current_price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double atr_stop = g_RiskManager.CalculateATRStopDistance() * _Point;
+    
+    g_ChartMgr.CreateOrUpdateHLine("ATR_Support", current_price - atr_stop, 
+                                   clrCornflowerBlue, STYLE_DOT, 1);
+    g_ChartMgr.CreateOrUpdateHLine("ATR_Resistance", current_price + atr_stop, 
+                                   clrCrimson, STYLE_DOT, 1);
+    
+    ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
 //| Expert Initialization                                             |
 //+------------------------------------------------------------------+
 int OnInit()
 {
     if (Inp_DebugLevel >= 1)
-        Print("╔══════════════════════════════════════════════╗");
-        Print("║  SOEA v4.1 Enhanced Initialization Started  ║");
-        Print("╚══════════════════════════════════════════════╝");
+    {
+        Print("????????????????????????????????????????????????");
+        Print("?  SOEA v4.1 Enhanced Initialization Started  ?");
+        Print("????????????????????????????????????????????????");
+    }
     
     // Validate inputs
     if (Inp_FixedRiskPercent <= 0 || Inp_FixedRiskPercent > 10)
@@ -1255,7 +1266,7 @@ int OnInit()
         return INIT_PARAMETERS_INCORRECT;
     }
     
-    // Initialize indicators with error handling
+    // Initialize indicators
     g_handle_MA_1 = iMA(_Symbol, _Period, Inp_FastMAPeriod_Default, 0, MODE_SMA, PRICE_CLOSE);
     if (g_handle_MA_1 == INVALID_HANDLE)
     {
@@ -1296,12 +1307,7 @@ int OnInit()
     ArraySetAsSeries(g_ATRBuffer, true);
     ArraySetAsSeries(g_RSIBuffer, true);
     
-    ArrayResize(g_MABuffer_1, 3);
-    ArrayResize(g_MABuffer_2, 3);
-    ArrayResize(g_ATRBuffer, 3);
-    ArrayResize(g_RSIBuffer, 3);
-    
-    // Load HWM and gate status for drawdown monitoring
+    // Load HWM and gate status
     g_DrawdownGate.LoadHighWaterMark();
     
     // Load initial parameters
@@ -1312,9 +1318,10 @@ int OnInit()
     // Validate DLL if requested
     if (Inp_UseExternalDLL)
     {
-        if (!IsDllsAllowed())
+        // FIXED: Use TerminalInfoInteger instead of IsDllsAllowed
+        if (!TerminalInfoInteger(TERMINAL_DLLS_ALLOWED))
         {
-            Print("ERROR: DLL imports not allowed. Enable in EA properties.");
+            Print("ERROR: DLL imports not allowed. Enable in Tools->Options->Expert Advisors.");
             return INIT_FAILED;
         }
         
@@ -1326,21 +1333,15 @@ int OnInit()
         else
         {
             Print("WARNING: DLL validation failed. Using internal regime detection.");
-            // Don't fail initialization, just disable DLL
-            // Inp_UseExternalDLL = false; // Can't modify input
         }
     }
     
     // Initialize statistics
     g_Stats.last_reset = TimeCurrent();
     
-    // Set chart properties
-    ChartSetInteger(0, CHART_SHOW_GRID, false);
-    ChartSetInteger(0, CHART_SHOW_OHLC, true);
-    
     if (Inp_DebugLevel >= 1)
     {
-        Print("═══════════════════════════════════════════════");
+        Print("???????????????????????????????????????????????");
         Print("Symbol: ", _Symbol);
         Print("Period: ", EnumToString(_Period));
         Print("Initial Equity: ", DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2));
@@ -1348,9 +1349,9 @@ int OnInit()
         Print("Max Drawdown: ", Inp_MaxEquityDrawdown, "%");
         Print("Soft Gate: ", Inp_SoftGateThreshold, "%");
         Print("Magic Number: ", Inp_MagicNumber);
-        Print("═══════════════════════════════════════════════");
-        Print("SOEA v4.1 Enhanced Initialization Completed ✓");
-        Print("═══════════════════════════════════════════════");
+        Print("???????????????????????????????????????????????");
+        Print("SOEA v4.1 Enhanced Initialization Completed ?");
+        Print("???????????????????????????????????????????????");
     }
     
     return INIT_SUCCEEDED;
@@ -1363,25 +1364,20 @@ void OnDeinit(const int reason)
 {
     if (Inp_DebugLevel >= 1)
     {
-        Print("═══════════════════════════════════════════════");
+        Print("???????????????????????????????????????????????");
         Print("SOEA v4.1 Enhanced Deinitialization");
-        Print("Reason: ", reason, " - ", GetUninitReasonText(reason));
-        Print("═══════════════════════════════════════════════");
+        Print("Reason: ", reason);
+        Print("???????????????????????????????????????????????");
     }
     
-    // Update HWM one last time
     g_DrawdownGate.UpdateHighWaterMark();
     
-    // Release indicators
     if (g_handle_MA_1 != INVALID_HANDLE) IndicatorRelease(g_handle_MA_1);
     if (g_handle_MA_2 != INVALID_HANDLE) IndicatorRelease(g_handle_MA_2);
     if (g_handle_ATR != INVALID_HANDLE) IndicatorRelease(g_handle_ATR);
     if (g_handle_RSI != INVALID_HANDLE) IndicatorRelease(g_handle_RSI);
     
-    // Clear chart objects
     g_ChartMgr.ClearAllObjects();
-    
-    // Clear comment
     Comment("");
     
     if (Inp_DebugLevel >= 1)
@@ -1389,32 +1385,10 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
-//| Get Uninit Reason Text                                            |
-//+------------------------------------------------------------------+
-string GetUninitReasonText(int reason)
-{
-    switch(reason)
-    {
-        case REASON_PROGRAM:     return "EA stopped by user";
-        case REASON_REMOVE:      return "EA removed from chart";
-        case REASON_RECOMPILE:   return "EA recompiled";
-        case REASON_CHARTCHANGE: return "Chart symbol/period changed";
-        case REASON_CHARTCLOSE:  return "Chart closed";
-        case REASON_PARAMETERS:  return "Input parameters changed";
-        case REASON_ACCOUNT:     return "Account changed";
-        case REASON_TEMPLATE:    return "Template applied";
-        case REASON_INITFAILED:  return "Initialization failed";
-        case REASON_CLOSE:       return "Terminal closed";
-        default:                 return "Unknown reason";
-    }
-}
-
-//+------------------------------------------------------------------+
 //| Expert Tick Function                                              |
 //+------------------------------------------------------------------+
 void OnTick()
 {
-    // New bar check
     datetime current_bar_time = (datetime)SeriesInfoInteger(_Symbol, _Period, SERIES_LASTBAR_DATE);
     if (current_bar_time == 0 || current_bar_time == g_LastBarTime)
         return;
@@ -1422,7 +1396,7 @@ void OnTick()
     g_LastBarTime = current_bar_time;
     g_BarsSinceLastTrade++;
     
-    // 1. Update and enforce drawdown gating FIRST
+    // 1. Update and enforce drawdown gating
     g_DrawdownGate.UpdateHighWaterMark();
     g_DrawdownGate.EnforceDrawdownGate(Inp_MaxEquityDrawdown);
     g_CurrentGatingStatus = g_DrawdownGate.GateStatus();
@@ -1452,21 +1426,23 @@ void OnTick()
     }
     else
     {
-        // Simple internal regime detection based on ADX or volatility
-        // For now, alternate based on MA spread
+        // Simple internal regime detection based on MA spread
         if (ArraySize(g_MABuffer_1) >= 1 && ArraySize(g_MABuffer_2) >= 1)
         {
             double ma_spread = MathAbs(g_MABuffer_1[0] - g_MABuffer_2[0]);
             double atr = g_RiskManager.GetATRValue();
             
-            // If MAs are far apart (> 2 ATR), assume trending
-            // If MAs are close (< 1 ATR), assume ranging
-            if (ma_spread > atr * 2.0)
-                regime_id = REGIME_TREND;
-            else if (ma_spread < atr)
-                regime_id = REGIME_RANGE;
-            else
-                regime_id = REGIME_TREND; // Default to trend
+            if (atr > 0)
+            {
+                // If MAs are far apart (> 2 ATR), assume trending
+                // If MAs are close (< 1 ATR), assume ranging
+                if (ma_spread > atr * 2.0)
+                    regime_id = REGIME_TREND;
+                else if (ma_spread < atr)
+                    regime_id = REGIME_RANGE;
+                else
+                    regime_id = REGIME_TREND; // Default to trend
+            }
         }
     }
     g_CurrentRegime = (ENUM_REGIME_ID)regime_id;
@@ -1526,108 +1502,6 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
-//| Update Chart Objects                                              |
-//+------------------------------------------------------------------+
-void UpdateChartObjects()
-{
-    // Draw MA lines
-    if (ArraySize(g_MABuffer_1) >= 1 && ArraySize(g_MABuffer_2) >= 1)
-    {
-        g_ChartMgr.CreateOrUpdateHLine("FastMA", g_MABuffer_1[0], clrDodgerBlue, STYLE_SOLID, 2);
-        g_ChartMgr.CreateOrUpdateHLine("SlowMA", g_MABuffer_2[0], clrRed, STYLE_SOLID, 2);
-    }
-    
-    // Draw drawdown gates
-    double hwm = g_DrawdownGate.HighWaterMark();
-    double hard_gate_price = hwm * (1.0 - Inp_MaxEquityDrawdown / 100.0);
-    double soft_gate_price = hwm * (1.0 - Inp_SoftGateThreshold / 100.0);
-    
-    g_ChartMgr.CreateOrUpdateHLine("HardGate", hard_gate_price, clrDarkRed, STYLE_DASHDOT, 3);
-    g_ChartMgr.CreateOrUpdateHLine("SoftGate", soft_gate_price, clrOrange, STYLE_DASH, 2);
-    
-    // Draw ATR levels
-    double current_price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-    double atr_stop = g_RiskManager.CalculateATRStopDistance() * _Point;
-    
-    g_ChartMgr.CreateOrUpdateHLine("ATR_Support", current_price - atr_stop, 
-                                   clrCornflowerBlue, STYLE_DOT, 1);
-    g_ChartMgr.CreateOrUpdateHLine("ATR_Resistance", current_price + atr_stop, 
-                                   clrCrimson, STYLE_DOT, 1);
-    
-    // Draw position info labels
-    int y_offset = 150;
-    int pos_count = 0;
-    
-    for (int i = 0; i < PositionsTotal(); i++)
-    {
-        if (!g_PosInfo.SelectByIndex(i)) continue;
-        if (g_PosInfo.Symbol() != _Symbol) continue;
-        if (g_PosInfo.Magic() != Inp_MagicNumber) continue;
-        
-        pos_count++;
-        
-        double entry_price = g_PosInfo.PriceOpen();
-        double current_pos_price = g_PosInfo.PriceCurrent();
-        double profit = g_PosInfo.Profit();
-        double volume = g_PosInfo.Volume();
-        
-        color pos_color = (profit >= 0) ? clrLimeGreen : clrRed;
-        string pos_type = (g_PosInfo.Type() == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-        
-        string pos_text = StringFormat("%s | %.2f lots | Entry: %.5f | P&L: $%.2f",
-                                       pos_type, volume, entry_price, profit);
-        
-        g_ChartMgr.CreateOrUpdateLabel("Position_" + IntegerToString(pos_count), 
-                                       10, y_offset + (pos_count * 20), 
-                                       pos_text, pos_color, 9);
-    }
-    
-    // Clear old position labels if count decreased
-    for (int i = pos_count + 1; i <= 10; i++)
-    {
-        string obj_name = "SOEA_Position_" + IntegerToString(i);
-        if (ObjectFind(0, obj_name) >= 0)
-            ObjectDelete(0, obj_name);
-    }
-    
-    // Draw regime status
-    string regime_text = "";
-    color regime_color = clrWhite;
-    
-    if (g_CurrentRegime == REGIME_TREND)
-    {
-        regime_text = "📈 TREND MODE";
-        regime_color = clrDodgerBlue;
-    }
-    else if (g_CurrentRegime == REGIME_RANGE)
-    {
-        regime_text = "📊 RANGE MODE";
-        regime_color = clrOrange;
-    }
-    else
-    {
-        regime_text = "⏸ IDLE MODE";
-        regime_color = clrGray;
-    }
-    
-    g_ChartMgr.CreateOrUpdateLabel("RegimeStatus", 10, 100, regime_text, regime_color, 12);
-    
-    // Draw equity info
-    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double profit = equity - balance;
-    color profit_color = (profit >= 0) ? clrLimeGreen : clrRed;
-    
-    string equity_text = StringFormat("Equity: $%.2f", equity);
-    string profit_text = StringFormat("P&L: $%.2f", profit);
-    
-    g_ChartMgr.CreateOrUpdateLabel("EquityValue", 10, 120, equity_text, clrWhite, 11);
-    g_ChartMgr.CreateOrUpdateLabel("ProfitValue", 10, 135, profit_text, profit_color, 11);
-    
-    ChartRedraw();
-}
-
-//+------------------------------------------------------------------+
 //| Strategy Tester Fitness Function                                 |
 //+------------------------------------------------------------------+
 double OnTester()
@@ -1648,10 +1522,9 @@ double OnTester()
     }
     
     // Composite Robustness Index: Balance profit with risk
-    // Enhanced formula with Sharpe ratio
     double trade_quality = profit_factor / (1.0 + max_dd / 100.0);
-    double trade_frequency_factor = MathMin((double)total_trades / 100.0, 2.0);  // Cap at 2.0
-    double sharpe_factor = MathMax(sharpe_ratio, 0.1); // Minimum 0.1
+    double trade_frequency_factor = MathMin((double)total_trades / 100.0, 2.0);
+    double sharpe_factor = MathMax(sharpe_ratio, 0.1);
     
     double composite_index = trade_quality * MathSqrt(recovery_factor) * 
                             trade_frequency_factor * sharpe_factor;
@@ -1669,23 +1542,23 @@ double OnTester()
     // Penalty for excessive drawdown
     if (max_dd > 25.0)
     {
-        composite_index *= 0.5; // 50% penalty
+        composite_index *= 0.5;
         if (Inp_DebugLevel >= 2)
             Print("Excessive drawdown penalty applied: ", max_dd, "%");
     }
     
-    // Penalty for low win rate (below 30%)
+    // Penalty for low win rate
     double win_rate = (TesterStatistics(STAT_PROFIT_TRADES) / total_trades) * 100.0;
     if (win_rate < 30.0)
     {
-        composite_index *= 0.7; // 30% penalty
+        composite_index *= 0.7;
         if (Inp_DebugLevel >= 2)
             Print("Low win rate penalty applied: ", win_rate, "%");
     }
     
     if (Inp_DebugLevel >= 1)
     {
-        Print("═══════════════════════════════════════");
+        Print("???????????????????????????????????????");
         Print("Optimization Result:");
         Print("  Profit Factor: ", profit_factor);
         Print("  Max DD: ", max_dd, "%");
@@ -1694,7 +1567,7 @@ double OnTester()
         Print("  Win Rate: ", win_rate, "%");
         Print("  Sharpe Ratio: ", sharpe_ratio);
         Print("  Composite Index: ", composite_index);
-        Print("═══════════════════════════════════════");
+        Print("???????????????????????????????????????");
     }
     
     return composite_index;
@@ -1705,7 +1578,8 @@ double OnTester()
 //+------------------------------------------------------------------+
 void OnTesterDeinit()
 {
-    if (!IsTesting() && !IsOptimization())
+    // FIXED: Use MQLInfoInteger instead of IsTesting/IsOptimization
+    if (!MQLInfoInteger(MQL_TESTER) && !MQLInfoInteger(MQL_OPTIMIZATION))
         return;
     
     // Retrieve best optimization result
@@ -1720,7 +1594,7 @@ void OnTesterDeinit()
     int tested_regime = (int)g_CurrentRegime;
     if (tested_regime == 0) tested_regime = REGIME_TREND;
     
-    // Calculate out-of-sample (verification) period based on WFO offset
+    // Calculate out-of-sample period based on WFO offset
     datetime test_start = D'2020.01.01' + (Inp_WFO_StepOffset * 30 * 24 * 3600);
     datetime test_end = test_start + (Inp_WFO_StepMonths * 30 * 24 * 3600);
     
@@ -1732,7 +1606,7 @@ void OnTesterDeinit()
         return;
     }
     
-    // Persist results to CSV file (APPEND mode to preserve history)
+    // Persist results to CSV file
     int fH = FileOpen(Inp_WFO_File_Name, FILE_WRITE | FILE_READ | FILE_CSV | FILE_ANSI, '\t');
     if (fH == INVALID_HANDLE)
     {
@@ -1769,7 +1643,7 @@ void OnTesterDeinit()
         
         if (Inp_DebugLevel >= 1)
         {
-            Print("═══════════════════════════════════════");
+            Print("???????????????????????????????????????");
             Print("WFO results saved:");
             Print("  Period: ", TimeToString(test_start), " to ", TimeToString(test_end));
             Print("  Regime: ", tested_regime);
@@ -1778,7 +1652,7 @@ void OnTesterDeinit()
             Print("  Trades: ", total_trades);
             Print("  Max DD: ", max_dd, "%");
             Print("  Profit Factor: ", profit_factor);
-            Print("═══════════════════════════════════════");
+            Print("???????????????????????????????????????");
         }
     }
     else
@@ -1788,22 +1662,7 @@ void OnTesterDeinit()
 }
 
 //+------------------------------------------------------------------+
-//| Timer Function (Optional - for periodic updates)                 |
-//+------------------------------------------------------------------+
-void OnTimer()
-{
-    // Update HWM periodically (every timer tick)
-    g_DrawdownGate.UpdateHighWaterMark();
-    
-    // Check for emergency conditions
-    if (g_CurrentGatingStatus == GATING_HALTED)
-    {
-        g_TradeManager.CloseAllPositions();
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Trade Transaction Handler (Optional - for advanced tracking)     |
+//| Trade Transaction Handler (Optional)                             |
 //+------------------------------------------------------------------+
 void OnTradeTransaction(const MqlTradeTransaction& trans,
                         const MqlTradeRequest& request,
@@ -1850,7 +1709,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
 }
 
 //+------------------------------------------------------------------+
-//| Chart Event Handler (Optional - for GUI interaction)             |
+//| Chart Event Handler (Optional)                                   |
 //+------------------------------------------------------------------+
 void OnChartEvent(const int id,
                   const long &lparam,
@@ -1862,13 +1721,11 @@ void OnChartEvent(const int id,
     {
         if (sparam == "SOEA_ResetButton")
         {
-            // Manual reset of drawdown gate
             g_DrawdownGate.ResetGate();
             Print("Drawdown gate manually reset by user.");
         }
         else if (sparam == "SOEA_CloseAllButton")
         {
-            // Manual close all positions
             g_TradeManager.CloseAllPositions();
             Print("All positions manually closed by user.");
         }
@@ -1876,128 +1733,5 @@ void OnChartEvent(const int id,
 }
 
 //+------------------------------------------------------------------+
-//| Helper Function: Calculate Statistics                            |
+//| END OF SOEA v4.1                                                 |
 //+------------------------------------------------------------------+
-void CalculateStatistics()
-{
-    // Calculate current drawdown
-    g_Stats.current_drawdown = g_DrawdownGate.GetCurrentDrawdown();
-    
-    // Update max drawdown if exceeded
-    if (g_Stats.current_drawdown > g_Stats.max_drawdown)
-        g_Stats.max_drawdown = g_Stats.current_drawdown;
-    
-    // Log statistics periodically
-    static datetime last_log_time = 0;
-    if (TimeCurrent() - last_log_time > 3600 && Inp_DebugLevel >= 1) // Every hour
-    {
-        double win_rate = (g_Stats.total_trades > 0) ? 
-                         (g_Stats.winning_trades * 100.0 / g_Stats.total_trades) : 0;
-        double profit_factor = (g_Stats.gross_loss > 0) ? 
-                              (g_Stats.gross_profit / g_Stats.gross_loss) : 0;
-        
-        Print("═══════════════════════════════════════");
-        Print("Performance Statistics:");
-        Print("  Total Trades: ", g_Stats.total_trades);
-        Print("  Winning: ", g_Stats.winning_trades, " | Losing: ", g_Stats.losing_trades);
-        Print("  Win Rate: ", DoubleToString(win_rate, 2), "%");
-        Print("  Gross Profit: $", DoubleToString(g_Stats.gross_profit, 2));
-        Print("  Gross Loss: $", DoubleToString(g_Stats.gross_loss, 2));
-        Print("  Profit Factor: ", DoubleToString(profit_factor, 2));
-        Print("  Max DD: ", DoubleToString(g_Stats.max_drawdown, 2), "%");
-        Print("  Current DD: ", DoubleToString(g_Stats.current_drawdown, 2), "%");
-        Print("═══════════════════════════════════════");
-        
-        last_log_time = TimeCurrent();
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Helper Function: Validate Symbol Trading Conditions              |
-//+------------------------------------------------------------------+
-bool ValidateTradingConditions()
-{
-    // Check if trading is allowed
-    if (!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
-    {
-        if (Inp_DebugLevel >= 1)
-            Print("ERROR: Terminal trading is not allowed");
-        return false;
-    }
-    
-    if (!MQLInfoInteger(MQL_TRADE_ALLOWED))
-    {
-        if (Inp_DebugLevel >= 1)
-            Print("ERROR: EA trading is not allowed");
-        return false;
-    }
-    
-    // Check if symbol is available for trading
-    if (!SymbolInfoInteger(_Symbol, SYMBOL_TRADE_MODE))
-    {
-        if (Inp_DebugLevel >= 1)
-            Print("ERROR: Symbol ", _Symbol, " is not available for trading");
-        return false;
-    }
-    
-    // Check account connection
-    if (!AccountInfoInteger(ACCOUNT_TRADE_EXPERT))
-    {
-        if (Inp_DebugLevel >= 1)
-            Print("ERROR: Automated trading is disabled for this account");
-        return false;
-    }
-    
-    // Check margin availability
-    double free_margin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-    if (free_margin <= 0)
-    {
-        if (Inp_DebugLevel >= 1)
-            Print("ERROR: No free margin available");
-        return false;
-    }
-    
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Helper Function: Export Statistics to File                       |
-//+------------------------------------------------------------------+
-void ExportStatistics(string filename = "SOEA_Statistics.csv")
-{
-    int fH = FileOpen(filename, FILE_WRITE | FILE_CSV | FILE_ANSI, ',');
-    if (fH == INVALID_HANDLE)
-    {
-        Print("ERROR: Failed to create statistics file");
-        return;
-    }
-    
-    // Write header
-    FileWriteString(fH, "Metric,Value\n");
-    
-    // Write statistics
-    FileWriteString(fH, StringFormat("Total Trades,%d\n", g_Stats.total_trades));
-    FileWriteString(fH, StringFormat("Winning Trades,%d\n", g_Stats.winning_trades));
-    FileWriteString(fH, StringFormat("Losing Trades,%d\n", g_Stats.losing_trades));
-    FileWriteString(fH, StringFormat("Gross Profit,%.2f\n", g_Stats.gross_profit));
-    FileWriteString(fH, StringFormat("Gross Loss,%.2f\n", g_Stats.gross_loss));
-    FileWriteString(fH, StringFormat("Max Drawdown,%.2f\n", g_Stats.max_drawdown));
-    FileWriteString(fH, StringFormat("Current Drawdown,%.2f\n", g_Stats.current_drawdown));
-    
-    double win_rate = (g_Stats.total_trades > 0) ? 
-                     (g_Stats.winning_trades * 100.0 / g_Stats.total_trades) : 0;
-    double profit_factor = (g_Stats.gross_loss > 0) ? 
-                          (g_Stats.gross_profit / g_Stats.gross_loss) : 0;
-    
-    FileWriteString(fH, StringFormat("Win Rate,%.2f%%\n", win_rate));
-    FileWriteString(fH, StringFormat("Profit Factor,%.2f\n", profit_factor));
-    FileWriteString(fH, StringFormat("Export Time,%s\n", TimeToString(TimeCurrent())));
-    
-    FileClose(fH);
-    
-    Print("Statistics exported to: ", filename);
-}
-
-//+------------------------------------------------------------------+
-//| END OF ENHANCED SOEA v4.1                                        |
-//+------------------------------------------------------------------+        
